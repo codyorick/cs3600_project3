@@ -36,12 +36,13 @@ typedef struct {
 } question;
 
 typedef struct {
-  char name[64];
+  //char name[64];
   unsigned short type;
   unsigned short class;
   unsigned int ttl;
   unsigned short rdlength;
-  unsigned int rdata;
+  unsigned int rdata_ip;
+  char rdata_cname[256];
 } answer;
 
 
