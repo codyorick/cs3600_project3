@@ -81,6 +81,104 @@ static void dump_packet(unsigned char *data, int size) {
     }
 }
 
+
+unsigned int get_number_from_n_chars(char *first_char, int n){
+  unsigned char tmp_bytes[4];
+  memset(&tmp_bytes, 0, 4);
+  memcpy(&tmp_bytes, first_char, n);
+  unsigned int val = *tmp_bytes;
+  for(int i = 1; i < n; i++){ // start at 1 because first byte is handled
+    val = val << 8;
+    val |= (*(tmp_bytes + i));
+  }
+  return val;
+}
+
+unsigned int get_int_from_four_chars(char *first){
+  return get_number_from_n_chars(first, 4);
+}
+
+unsigned short get_short_from_two_chars(char *first){
+  return (unsigned short) get_number_from_n_chars(first, 2);
+}
+
+
+/*
+ *
+ */
+int parse_name_at_offset(char *response, int starts_at, char *buff){
+  int size_of_next_label = get_number_from_n_chars(response + starts_at, 1);
+  int chars_added = 0;
+  while(size_of_next_label != 0 && chars_added < 256){
+    starts_at++;
+    if(size_of_next_label >> 6 == 0x3){
+      int pointer = get_number_from_n_chars(response + starts_at -1 , 2);
+      pointer &= 0x3fff;
+      char pointer_buff[256];
+      int added_recursively = parse_name_at_offset(response, pointer, 
+                                                   pointer_buff);
+      strcpy(buff + chars_added, pointer_buff);
+      chars_added += added_recursively;
+      break;
+    }
+    for(int i=0; i < size_of_next_label; i++){
+      buff[chars_added] = *(response + starts_at + i);
+      chars_added++;
+    }
+    buff[chars_added] = '.';
+    chars_added++;
+    starts_at+=size_of_next_label;
+    size_of_next_label = get_number_from_n_chars(response + starts_at, 1);
+  }
+  buff[chars_added-1] = '\0';
+  return chars_added;
+}
+
+/*
+ * buff is the full incoming response. Starts at is the offset into buff where
+ * the answer starts. Answer a is the answer we fill in.
+ *
+ * return the final offset (end of this answer in the buff)
+ */
+int parse_answer(char *response, int starts_at, answer *a){
+  
+  int offset = starts_at + 2;  // skipping past the name
+
+  a->type = get_short_from_two_chars(response+offset);
+  offset+=2;
+  a->class = get_short_from_two_chars(response+offset);
+  offset+=2;
+  a->ttl = get_int_from_four_chars(response+offset);
+  offset+=4;
+  a->rdlength = get_short_from_two_chars(response+offset);
+  offset+=2;
+  if(a->type == 1){
+    a->rdata_ip = get_int_from_four_chars(response+offset);
+    offset+=4;
+  }
+  else if (a->type == 5){
+    char full_name[256];
+    int chars_added = parse_name_at_offset(response, offset, full_name);
+    strcpy(a->rdata_cname, full_name);
+    offset += chars_added;
+  }
+  return offset;
+}
+
+int convert_to_ip(unsigned int raw_ip, char *buf){
+  
+  int nums[4];
+  for (int i = 0; i < 4; i++){
+    int ip = raw_ip;
+    ip = ip >> (8 * (3 - i));
+    nums[i] = ip % 128;
+  }
+
+  sprintf(buf, "%d.%d.%d.%d", nums[0], nums[1], nums[2], nums[3]);
+
+  return 0;
+}
+
 int main(int argc, char *argv[]) {
   /**
    * I've included some basic code for opening a socket in C, sending
@@ -93,11 +191,11 @@ int main(int argc, char *argv[]) {
   char server[22]; // max length of server + port
   strcpy(server, argv[1] + 1); // + 1 is to go past the "@" symbol
   char *ip = strtok(server, ":");
-  char *port = strtok(NULL, ":");
+  char *port_alpha = strtok(NULL, ":");
   // if no port is given, set it to 53
-  if(port == NULL)
-    port = "53";
-  short port2 = atoi(port);
+  if(port_alpha == NULL)
+    port_alpha = "53";
+  short port = atoi(port_alpha);
   
   char name[100];
   strcpy(name, argv[2]);
@@ -163,10 +261,10 @@ int main(int argc, char *argv[]) {
   // next, construct the destination address
   struct sockaddr_in out;
   out.sin_family = AF_INET;
-  out.sin_port = htons(port2);
+  out.sin_port = htons(port);
   out.sin_addr.s_addr = inet_addr(ip);
 
-  if (sendto(sock, packet, sizeof(packet), 0, &out, sizeof(out)) < 0) {
+  if (sendto(sock, packet, offset, 0, &out, sizeof(out)) < 0) {
     // an error occurred
     printf("an error occurred\n");
   }
@@ -184,12 +282,13 @@ int main(int argc, char *argv[]) {
   struct timeval t;
   t.tv_sec = 5;
   t.tv_usec = 0;
-  
-  char *recvbuf = malloc(1000 * sizeof(char));
+
+  int sizeof_recvbuf = 500;
+  char *recvbuf = malloc(sizeof_recvbuf * sizeof(char));
 
   // wait to receive, or for a timeout
   if (select(sock + 1, &socks, NULL, NULL, &t)) {
-    if (recvfrom(sock, recvbuf, sizeof(*recvbuf), 0, &in, &in_len) < 0) {
+    if (recvfrom(sock, recvbuf, sizeof_recvbuf, 0, &in, &in_len) < 0) {
       // an error occured
       printf("error in receiving\n");
     }
@@ -198,7 +297,61 @@ int main(int argc, char *argv[]) {
     printf("timeout occurred\n");
   }
 
+  header response_header;
+  int response_offset = 0;
+
+  response_header.id = get_short_from_two_chars(recvbuf);
+  response_offset += 2;
+
+  char tmp_byte[1];
+  memcpy(&tmp_byte, recvbuf + response_offset, 1);
+  response_header.qr = ((*tmp_byte >> 7) & 0x1);
+  response_header.opcode = ((*tmp_byte >> 3) & 0xf);
+  response_header.aa = ((*tmp_byte >> 2) & 0x1);
+  response_header.tc = ((*tmp_byte >> 1) & 0x1);
+  response_header.rd = (*tmp_byte & 0x1);
+  response_offset++;
+  memcpy(&tmp_byte, recvbuf + response_offset, 1);
+  response_header.ra = ((*tmp_byte >> 7) & 0x1);
+  response_header.z = ((*tmp_byte >> 4) & 0x7);
+  response_header.rcode = (*tmp_byte & 0xf);
+  response_offset++;
+
+  response_header.qdcount = get_short_from_two_chars(recvbuf + response_offset);
+  response_offset+=2;
+  response_header.ancount = get_short_from_two_chars(recvbuf + response_offset);
+  response_offset+=2;
+  response_header.nscount = get_short_from_two_chars(recvbuf + response_offset);
+  response_offset+=2;
+  response_header.arcount = get_short_from_two_chars(recvbuf + response_offset);
+  response_offset+=2;
+
+ 
+  answer answers[20];
+  response_offset = offset; // TODO this is a horrible way to do this
+  for(int i = 0; i < response_header.ancount; i++){
+    answer a;
+    response_offset = parse_answer(recvbuf, response_offset, &a);
+    answers[i] = a;
+  }
+
+  char *auth = "auth";
+  if (response_header.aa == 0)
+    auth = "nonauth";
+  for(int i = 0; i < response_header.ancount; i++){
+    if (answers[i].type == 1){
+      char ip_addr[15];
+      convert_to_ip(answers[i].rdata_ip, ip_addr);
+      printf("IP\t%s\t%s\n", ip_addr, auth);
+    }
+    else{
+      printf("CNAME\t%s\t%s\n", answers[i].rdata_cname, auth);
+    }
+  }
+
   // print out the result
-  
+  printf("\n");
+  dump_packet(recvbuf, sizeof_recvbuf);
+ 
   return 0;
 }
