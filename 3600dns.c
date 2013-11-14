@@ -332,7 +332,7 @@ int main(int argc, char *argv[]) {
 
  
   answer answers[20];
-  response_offset = offset; // TODO this is a horrible way to do thisb 331
+  response_offset = offset; // TODO this is a horrible way to do this
   for(int i = 0; i < response_header.ancount; i++){
     answer a;
     response_offset = parse_answer(recvbuf, response_offset, &a);
