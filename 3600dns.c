@@ -81,7 +81,7 @@ static void dump_packet(unsigned char *data, int size) {
     }
 }
 
-
+// Gets a int from n number of chars, starting at first_char
 unsigned int get_number_from_n_chars(char *first_char, int n){
   unsigned char tmp_bytes[4];
   memset(&tmp_bytes, 0, 4);
@@ -93,33 +93,34 @@ unsigned int get_number_from_n_chars(char *first_char, int n){
   }
   return val;
 }
-
+// calls the above function, with 4 chars
 unsigned int get_int_from_four_chars(char *first){
   return get_number_from_n_chars(first, 4);
 }
-
+// gets a short from 2 chars
 unsigned short get_short_from_two_chars(char *first){
   return (unsigned short) get_number_from_n_chars(first, 2);
 }
 
 
 /*
- *
+ * Parses the domain name at the given offset, and stores it in buff
  */
 int parse_name_at_offset(char *response, int starts_at, char *buff){
   int size_of_next_label = get_number_from_n_chars(response + starts_at, 1);
   int name_length = 0;
   int bytes_read = 0;
+  int added_recursively = 0;
   while(size_of_next_label != 0 && name_length < 256){
     starts_at++;
     if(size_of_next_label >> 6 == 0x3){
       int pointer = get_number_from_n_chars(response + starts_at -1 , 2);
       pointer &= 0x3fff;
       char pointer_buff[256];
-      int added_recursively = parse_name_at_offset(response, pointer, 
+      added_recursively = parse_name_at_offset(response, pointer, 
                                                    pointer_buff);
       strcpy(buff + name_length, pointer_buff);
-      name_length += added_recursively;
+      name_length = strlen(buff) + 1;
       bytes_read += 2;
       break;
     }
@@ -134,6 +135,8 @@ int parse_name_at_offset(char *response, int starts_at, char *buff){
     size_of_next_label = get_number_from_n_chars(response + starts_at, 1);
   }
   buff[name_length-1] = '\0';
+  if(!added_recursively)
+    bytes_read++;
   return bytes_read;
 }
 
@@ -159,7 +162,11 @@ int parse_answer(char *response, int starts_at, answer *a){
     a->rdata_ip = get_int_from_four_chars(response+offset);
     offset+=4;
   }
-  else if (a->type == 5){
+  if(a->type == 15) {
+    a->mx_preference = get_short_from_two_chars(response+offset);
+    offset+=2;
+  }
+  if (a->type == 5 || a->type == 2 || a->type == 15){
     char full_name[256];
     int bytes_read = parse_name_at_offset(response, offset, full_name);
     strcpy(a->rdata_cname, full_name);
@@ -167,7 +174,7 @@ int parse_answer(char *response, int starts_at, answer *a){
   }
   return offset;
 }
-
+// converts the given IP, in integer format, to the dotted form, stored in a given buffer
 int convert_to_ip(unsigned int raw_ip, char *buf){
   
   unsigned int nums[4];
@@ -191,32 +198,44 @@ int main(int argc, char *argv[]) {
    */
 
   // process the arguments
+  unsigned short qtype = 1;
+  int flag = 0;
+  if(argc == 4) {
+    flag = 1;
+    if(strcmp(argv[1], "-ns") == 0) {
+      qtype = 2;
+    } else if(strcmp(argv[1], "-mx") == 0) {
+      qtype = 15;
+    } else {
+      printf("Error: Invalid arguments\n");
+      return -1;
+    }
+  }
   char server[22]; // max length of server + port
-  strcpy(server, argv[1] + 1); // + 1 is to go past the "@" symbol
+  strcpy(server, argv[1 + flag] + 1); // + 1 is to go past the "@" symbol
   char *ip = strtok(server, ":");
   char *port_alpha = strtok(NULL, ":");
   // if no port is given, set it to 53
   if(port_alpha == NULL)
     port_alpha = "53";
   short port = atoi(port_alpha);
-  
-  char name[100];
-  strcpy(name, argv[2]);
+  char name[100]; // the domain name
+  strcpy(name, argv[2 + flag]);
   char *temp;
   char parsedname[64];
   memset(parsedname, 0, sizeof(parsedname));
   temp = strtok(name, ".");
   int len = strlen(temp);
-  sprintf(parsedname, "%c%s", len, temp);
+  sprintf(parsedname, "%c%s", len, temp); // parses the domain name to the proper format
   while((temp = strtok(NULL, ".")) != NULL) {
     char str[100];
     len = strlen(temp);
     sprintf(str, "%c%s", len, temp);
     strcat(parsedname, str);
   }
-  strcat(parsedname, "\0");
+  strcat(parsedname, "\0"); // null terminate
 
-  // construct the DNS request
+  // construct the DNS request, given by the spec
   header head;
   head.id = htons(1337);
   head.qr = 0;
@@ -238,7 +257,7 @@ int main(int argc, char *argv[]) {
   quest.qtype = htons(1);
   quest.qclass = htons(1);
   */
-  unsigned short qtype = htons(1);
+  qtype = htons(qtype);
   unsigned short qclass = htons(1);
   answer ans;
   
@@ -299,9 +318,9 @@ int main(int argc, char *argv[]) {
     // a timeout occurred
     printf("NORESPONSE\n");
   }
-
+  // create the response header
   header response_header;
-  int response_offset = 0;
+  int response_offset = 0; // 
 
   response_header.id = get_short_from_two_chars(recvbuf);
   response_offset += 2;
@@ -333,9 +352,10 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
- 
+  // array of answers received
   answer answers[20];
-  response_offset = offset; // TODO this is a horrible way to do this
+  response_offset = offset; // move past the question data to the answer
+  // parse all the answers into the array
   for(int i = 0; i < response_header.ancount; i++){
     answer a;
     response_offset = parse_answer(recvbuf, response_offset, &a);
@@ -345,20 +365,27 @@ int main(int argc, char *argv[]) {
   char *auth = "auth";
   if (response_header.aa == 0)
     auth = "nonauth";
+  // parse the answers
   for(int i = 0; i < response_header.ancount; i++){
-    if (answers[i].type == 1){
+    if (answers[i].type == 1){ // it is an IP
       char ip_addr[15];
       convert_to_ip(answers[i].rdata_ip, ip_addr);
       printf("IP\t%s\t%s\n", ip_addr, auth);
     }
-    else{
+    else if(answers[i].type == 5){
       printf("CNAME\t%s\t%s\n", answers[i].rdata_cname, auth);
+    }
+    else if(answers[i].type == 2) {
+      printf("NS\t%s\t%s\n", answers[i].rdata_cname, auth);
+    }
+    else if(answers[i].type == 15) {
+      printf("MX\t%s\t%d\t%s\n", answers[i].rdata_cname, answers[i].mx_preference, auth);
     }
   }
 
   // print out the result
-  printf("\n");
-  dump_packet(recvbuf, sizeof_recvbuf);
+  //printf("\n");
+  //dump_packet(recvbuf, sizeof_recvbuf);
  
   return 0;
 }

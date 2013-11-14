@@ -3,4 +3,17 @@ Cody Orick
 Ritchie Wilson
 Team nuclearfish
 
-We used a struct for the DNS Header.
+This is a simple DNS client.
+Usage: ./3600dns [-ns|-mx] @<server:port> <name>
+Where server is the IP address of a DNS server, and name is the domain name to query for. The port field is optional. 
+The -ns or -mx argument is also optional. Use -ns to query for a name server and -mx for a mail server.
+
+From a high level, we first construct the header and packet appropriately, then send it. Then, the received
+packet is parsed and the appropriate data is output.
+
+We used structs for the headers, questions, and answers. We were also able to complete the extra credit.
+
+
+
+
+

@@ -43,6 +43,7 @@ typedef struct {
   unsigned short rdlength;
   unsigned int rdata_ip;
   char rdata_cname[256];
+  unsigned short mx_preference;
 } answer;
 
 
