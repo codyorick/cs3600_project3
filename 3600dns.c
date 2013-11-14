@@ -170,11 +170,11 @@ int parse_answer(char *response, int starts_at, answer *a){
 
 int convert_to_ip(unsigned int raw_ip, char *buf){
   
-  int nums[4];
+  unsigned int nums[4];
   for (int i = 0; i < 4; i++){
-    int ip = raw_ip;
+    unsigned int ip = raw_ip;
     ip = ip >> (8 * (3 - i));
-    nums[i] = ip % 128;
+    nums[i] = ip & 255;
   }
 
   sprintf(buf, "%d.%d.%d.%d", nums[0], nums[1], nums[2], nums[3]);
@@ -297,7 +297,7 @@ int main(int argc, char *argv[]) {
     }
   } else {
     // a timeout occurred
-    printf("timeout occurred\n");
+    printf("NORESPONSE\n");
   }
 
   header response_header;
@@ -328,10 +328,14 @@ int main(int argc, char *argv[]) {
   response_offset+=2;
   response_header.arcount = get_short_from_two_chars(recvbuf + response_offset);
   response_offset+=2;
+  if(response_header.rcode == 3) {
+    printf("NOTFOUND\n");
+    return 0;
+  }
 
  
   answer answers[20];
-  response_offset = offset; // TODO this is a horrible way to do this
+  response_offset = offset; // TODO this is a horrible way to do thisb 331
   for(int i = 0; i < response_header.ancount; i++){
     answer a;
     response_offset = parse_answer(recvbuf, response_offset, &a);
