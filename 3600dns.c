@@ -108,8 +108,9 @@ unsigned short get_short_from_two_chars(char *first){
  */
 int parse_name_at_offset(char *response, int starts_at, char *buff){
   int size_of_next_label = get_number_from_n_chars(response + starts_at, 1);
-  int chars_added = 0;
-  while(size_of_next_label != 0 && chars_added < 256){
+  int name_length = 0;
+  int bytes_read = 0;
+  while(size_of_next_label != 0 && name_length < 256){
     starts_at++;
     if(size_of_next_label >> 6 == 0x3){
       int pointer = get_number_from_n_chars(response + starts_at -1 , 2);
@@ -117,21 +118,23 @@ int parse_name_at_offset(char *response, int starts_at, char *buff){
       char pointer_buff[256];
       int added_recursively = parse_name_at_offset(response, pointer, 
                                                    pointer_buff);
-      strcpy(buff + chars_added, pointer_buff);
-      chars_added += added_recursively;
+      strcpy(buff + name_length, pointer_buff);
+      name_length += added_recursively;
+      bytes_read += 2;
       break;
     }
     for(int i=0; i < size_of_next_label; i++){
-      buff[chars_added] = *(response + starts_at + i);
-      chars_added++;
+      buff[name_length] = *(response + starts_at + i);
+      name_length++;
     }
-    buff[chars_added] = '.';
-    chars_added++;
+    buff[name_length] = '.';
+    name_length++;
+    bytes_read = name_length;
     starts_at+=size_of_next_label;
     size_of_next_label = get_number_from_n_chars(response + starts_at, 1);
   }
-  buff[chars_added-1] = '\0';
-  return chars_added;
+  buff[name_length-1] = '\0';
+  return bytes_read;
 }
 
 /*
@@ -158,9 +161,9 @@ int parse_answer(char *response, int starts_at, answer *a){
   }
   else if (a->type == 5){
     char full_name[256];
-    int chars_added = parse_name_at_offset(response, offset, full_name);
+    int bytes_read = parse_name_at_offset(response, offset, full_name);
     strcpy(a->rdata_cname, full_name);
-    offset += chars_added;
+    offset += bytes_read;
   }
   return offset;
 }
